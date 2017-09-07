@@ -17,7 +17,6 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,8 +32,8 @@ public class CleanupApp {
     private static final String[] FILE_TYPES = {"convp", "rcinv", "jvm", "convsmw", "convtsw"};
     private static final int JOB_COMPLETION_WAIT_MIN = 2;
     private static SimpleDateFormat FMT = new SimpleDateFormat("MMddyy");
-    private static RandomStringGenerator generator;
-    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static RandomStringGenerator generator = new RandomStringGenerator.Builder().withinRange('a', 'z').build();
+    private int maxSize = 50;
     private Pattern dateRegex;
     private Date startDate, endDate;
     private String sourceDir, targetDir;
@@ -44,8 +43,10 @@ public class CleanupApp {
     private boolean isDelete = false;
     private boolean isGenerate = false;
     private boolean isDryRun = false;
+    private ExecutorService executor;
 
     public CleanupApp() {
+        createExecutor();
     }
 
     /**
@@ -65,7 +66,7 @@ public class CleanupApp {
             throw new IllegalArgumentException("Err: start/end date not valid format: MMddyy");
         }
         dateRegex = Pattern.compile(DATE_REGEX);
-        generator = new RandomStringGenerator.Builder().withinRange('a', 'z').build();
+        createExecutor();
     }
 
     public static void main(String[] args) {
@@ -85,6 +86,11 @@ public class CleanupApp {
         if (app.isDryRun) {
             LOGGER.debug(">> Dry run completed...");
         }
+    }
+
+    private void createExecutor() {
+        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("Rx-Delete-%d").build();
+        executor = Executors.newFixedThreadPool(maxSize, namedThreadFactory);
     }
 
     /**
@@ -123,6 +129,11 @@ public class CleanupApp {
         Option endDateOption = new Option("ed", "endDate", true, "end date for files:MMddyy [031418]");
         endDateOption.setRequired(false);
         options.addOption(endDateOption);
+
+        // thread
+        Option maxThreadOpt = new Option("threads", "maxThreads", true, "max threads for processing");
+        maxThreadOpt.setRequired(false);
+        options.addOption(maxThreadOpt);
 
         // DRY Run
         Option dryOpt = new Option("dry", "dryRun", false, "dry run, no action taken");
@@ -168,6 +179,14 @@ public class CleanupApp {
                 LOGGER.debug(">> DELETE action selected.{} -To- {} on dir:{}", startDate, endDate, deleteDirectory);
                 dateRegex = Pattern.compile(DATE_REGEX);
                 isDelete = true;
+            }
+            String maxString = cmd.getOptionValue("threads");
+            try {
+                int maxTSize = Integer.parseInt(maxString);
+                LOGGER.info("New thread size:{}", maxTSize);
+                maxSize = maxTSize;
+            } catch (NumberFormatException e) {
+                LOGGER.info("max threads:{}", maxSize);
             }
 
             // validation
@@ -221,8 +240,9 @@ public class CleanupApp {
     /**
      * initially tried using Schedulers.io, the problem is we don't know and can't determine when the threads
      * complete reliably.
-     * I don't want to count the # of tasks, since that's resource intensive. The threads are cached, so don't die.
-     * Switched to new CachedThreadPool
+     * I don't want to count the # of tasks, since that's resource intensive. CachedThreadPool is not useful,
+     * since it can quickly exhaust the resources, there is no upper limit.
+     * so had to choose fixed thread pool. using an executor service so that we can shutdown
      *
      * @param dirName
      */
@@ -230,9 +250,8 @@ public class CleanupApp {
         Stopwatch stopwatch = Stopwatch.createStarted();
         Path dir = Paths.get(dirName);
         AtomicInteger count = new AtomicInteger(0);
-        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("Rx-Delete-%d").build();
-        ExecutorService executor = Executors.newCachedThreadPool(namedThreadFactory);
-        LOGGER.debug("Working on dir:{}", dir.toString());
+
+        LOGGER.info("Working on dir:{}", dir.toString());
         try {
             Files.walkFileTree(dir, new FileVisitor<Path>() {
                 @Override
@@ -246,7 +265,10 @@ public class CleanupApp {
                     Observable.just(file).observeOn(Schedulers.from(executor)).subscribe(new Subscriber<Path>() {
                         @Override
                         public void onCompleted() {
-                            LOGGER.debug(">>Completed:{}", count.incrementAndGet());
+                            count.incrementAndGet();
+                            if (LOGGER.isTraceEnabled()) {
+                                LOGGER.trace(">>Completed:{}", count.get());
+                            }
                         }
 
                         @Override
@@ -271,7 +293,7 @@ public class CleanupApp {
 
                 @Override
                 public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                    LOGGER.debug(">> END-->{}", stopwatch.stop());
+                    LOGGER.debug(">> END-->{}", stopwatch);
                     return FileVisitResult.CONTINUE;
                 }
             });
@@ -279,7 +301,7 @@ public class CleanupApp {
             LOGGER.error("Err: Deleting files from dir:{}", dirName, e);
         }
         shutdownAndAwaitTermination(executor);
-        LOGGER.debug("#{} completed:{} at:{}", count.get(), stopwatch);
+        LOGGER.info("#{} completed: in:{}", count.get(), stopwatch.stop());
     }
 
     /**
@@ -294,7 +316,10 @@ public class CleanupApp {
             try {
                 Date fileDate = sdf.parse(m.group(1));
                 if (!(fileDate.before(startDate) || fileDate.after(endDate))) {
-                    LOGGER.debug(">>>\tDeleting file:{}->{}", file.getFileName(), Files.deleteIfExists(file));
+                    boolean stat = Files.deleteIfExists(file);
+                    if (LOGGER.isTraceEnabled()) {
+                        LOGGER.trace(">>>\tDeleting file:{}->{}", file.getFileName(), stat);
+                    }
                 }
             } catch (ParseException e) {
                 LOGGER.error("Err: can't convert date in file name:{} to date", file.getFileName());
@@ -319,11 +344,10 @@ public class CleanupApp {
         LOGGER.debug(">> parent:{} sample:{}", parent, sample.toString());
         String EXT = ".txt";
         for (int i = 0; i < cnt; i++) {
-            String sb = date + generator.generate(5) +
-                    FILE_TYPES[ThreadLocalRandom.current().nextInt(0, FILE_TYPES.length)] + EXT;
+            String sb = date + generator.generate(5) + generator.generate(8) + EXT;
             File newFile = new File(parent + sb);
-            Observable.just(newFile).observeOn(Schedulers.computation()).subscribe(file -> {
-                LOGGER.debug("Working on file:{}", file.toString());
+            Observable.just(newFile).observeOn(Schedulers.from(executor)).subscribe(file -> {
+                LOGGER.trace("Working on file:{}", file.toString());
                 try {
                     Files.copy(sample.toPath(), newFile.toPath());
                 } catch (IOException e) {
@@ -337,6 +361,7 @@ public class CleanupApp {
         } catch (InterruptedException e) {
             LOGGER.error("Err: waiting for all threads of audit processing in RX via latch", e);
         }
-        LOGGER.debug(">> END in:{}", stopwatch.stop());
+        LOGGER.info(">> END in:{}", stopwatch.stop());
+        shutdownAndAwaitTermination(executor);
     }
 }
