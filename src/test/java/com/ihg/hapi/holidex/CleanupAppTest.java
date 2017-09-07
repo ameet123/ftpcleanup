@@ -56,16 +56,19 @@ public class CleanupAppTest {
                 "1", "-dry"};
         CleanupApp.main(opts1);
     }
+    // Following 2 are the actual tests.
+
     @Test
     public void genWithOptions() {
         String[] opts1 = {"-g", "-tgt", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
                 "-src", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\sample_large", "-dt", "051214", "-c",
-                "10"};
+                "100"};
         CleanupApp.main(opts1);
     }
+
     @Test
     public void delWithOptions() {
-        String[] opts1 =  {"-d", "-dd", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+        String[] opts1 = {"-d", "-dd", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
                 "-sd", "031211", "-ed", "042319"};
         CleanupApp.main(opts1);
     }

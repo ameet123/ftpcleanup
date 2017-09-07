@@ -7,6 +7,7 @@ import org.apache.commons.text.RandomStringGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import rx.Observable;
+import rx.Subscriber;
 import rx.schedulers.Schedulers;
 
 import java.io.File;
@@ -15,9 +16,10 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,8 +30,10 @@ public class CleanupApp {
     private static final Logger LOGGER = LoggerFactory.getLogger(CleanupApp.class);
     private static final String DATE_REGEX = "^(\\d{6}).*$";
     private static final String[] FILE_TYPES = {"convp", "rcinv", "jvm", "convsmw", "convtsw"};
+    private static final int JOB_COMPLETION_WAIT_MIN = 2;
     private static SimpleDateFormat FMT = new SimpleDateFormat("MMddyy");
     private static RandomStringGenerator generator;
+    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private Pattern dateRegex;
     private Date startDate, endDate;
     private String sourceDir, targetDir;
@@ -194,10 +198,38 @@ public class CleanupApp {
         return this;
     }
 
+    private void shutdownAndAwaitTermination(ExecutorService pool) {
+        pool.shutdown(); // Disable new tasks from being submitted
+        try {
+            if (!pool.awaitTermination(JOB_COMPLETION_WAIT_MIN, TimeUnit.MINUTES)) {
+                LOGGER.error("Forceful shutdown, may lose work!!!");
+                pool.shutdownNow(); // Cancel currently executing tasks
+                // Wait a while for tasks to respond to being cancelled
+                if (!pool.awaitTermination(JOB_COMPLETION_WAIT_MIN, TimeUnit.MINUTES))
+                    LOGGER.debug("Pool did not terminate in {} min.", JOB_COMPLETION_WAIT_MIN);
+            }
+        } catch (InterruptedException ie) {
+            // (Re-)Cancel if current thread also interrupted
+            pool.shutdownNow();
+            // Preserve interrupt status
+            Thread.currentThread().interrupt();
+        }
+        LOGGER.debug(">>Completed executor pool shutdown");
+    }
+
+    /**
+     * initially tried using Schedulers.io, the problem is we don't know and can't determine when the threads
+     * complete reliably.
+     * I don't want to count the # of tasks, since that's resource intensive. The threads are cached, so don't die.
+     * Switched to new CachedThreadPool
+     *
+     * @param dirName
+     */
     public void delete(String dirName) {
         Stopwatch stopwatch = Stopwatch.createStarted();
         Path dir = Paths.get(dirName);
-
+        AtomicInteger count = new AtomicInteger(0);
+        ExecutorService executor = Executors.newCachedThreadPool();
         LOGGER.debug("Working on dir:{}", dir.toString());
         try {
             Files.walkFileTree(dir, new FileVisitor<Path>() {
@@ -209,18 +241,23 @@ public class CleanupApp {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Matcher m = dateRegex.matcher(file.getFileName().toString());
-                    if (m.find()) {
-                        LOGGER.debug(">>Found:{}", m.group(1));
-                        try {
-                            Date fileDate = FMT.parse(m.group(1));
-                            if (!(fileDate.before(startDate) || fileDate.after(endDate))) {
-                                LOGGER.debug(">>>\tDeleting file:{}", file.getFileName());
-                            }
-                        } catch (ParseException e) {
-                            LOGGER.error("Err: can't convert date in file name:{} to date", file.getFileName(), e);
+                    Observable.just(file).observeOn(Schedulers.from(executor)).subscribe(new Subscriber<Path>() {
+                        @Override
+                        public void onCompleted() {
+                            LOGGER.debug(">>Completed:{}", count.incrementAndGet());
                         }
-                    }
+
+                        @Override
+                        public void onError(Throwable e) {
+
+                        }
+
+                        @Override
+                        public void onNext(Path path) {
+                            deleteFile(path);
+                        }
+                    });
+
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -238,6 +275,30 @@ public class CleanupApp {
             });
         } catch (IOException e) {
             LOGGER.error("Err: Deleting files from dir:{}", dirName, e);
+        }
+        shutdownAndAwaitTermination(executor);
+        LOGGER.debug("#{} completed:{} at:{}", count.get(), stopwatch);
+    }
+
+    /**
+     * a single file
+     *
+     * @param file
+     */
+    private void deleteFile(Path file) {
+        SimpleDateFormat sdf = new SimpleDateFormat("MMddyy");
+        Matcher m = dateRegex.matcher(file.getFileName().toString());
+        if (m.find()) {
+            try {
+                Date fileDate = sdf.parse(m.group(1));
+                if (!(fileDate.before(startDate) || fileDate.after(endDate))) {
+                    LOGGER.debug(">>>\tDeleting file:{}->{}", file.getFileName(), Files.deleteIfExists(file));
+                }
+            } catch (ParseException e) {
+                LOGGER.error("Err: can't convert date in file name:{} to date", file.getFileName());
+            } catch (IOException e) {
+                LOGGER.error("Err: IO exception deleting:{}", file.getFileName());
+            }
         }
     }
 
