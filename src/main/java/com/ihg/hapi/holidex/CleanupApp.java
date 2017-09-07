@@ -2,6 +2,7 @@ package com.ihg.hapi.holidex;
 
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Strings;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.cli.*;
 import org.apache.commons.text.RandomStringGenerator;
 import org.slf4j.Logger;
@@ -229,7 +230,8 @@ public class CleanupApp {
         Stopwatch stopwatch = Stopwatch.createStarted();
         Path dir = Paths.get(dirName);
         AtomicInteger count = new AtomicInteger(0);
-        ExecutorService executor = Executors.newCachedThreadPool();
+        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("Rx-Delete-%d").build();
+        ExecutorService executor = Executors.newCachedThreadPool(namedThreadFactory);
         LOGGER.debug("Working on dir:{}", dir.toString());
         try {
             Files.walkFileTree(dir, new FileVisitor<Path>() {
