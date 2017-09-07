@@ -27,7 +27,46 @@ public class CleanupAppTest {
     @Test
     public void testGenerate() throws InterruptedException {
         app.generate(20, "051217", LARGE_DIR, TARGET_LARGE_DIR);
-//        Thread.sleep(5000L);
     }
 
+    @Test
+    public void testCmdOptions() {
+        String[] opts = {"-x", "-dd", "/home/eztld/testdir", "-sd", "031211", "-ed", "042318"};
+        app.parseCmdOptions(opts);
+    }
+
+    @Test
+    public void validDelOptions() {
+        String[] opts1 = {"-d", "-dd", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+                "-sd", "031211", "-ed", "042318"};
+        app.parseCmdOptions(opts1);
+    }
+
+    @Test
+    public void validGenOptions() {
+        String[] opts1 = {"-g", "-tgt", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+                "-src", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\sample_large", "-dt", "051214", "-c", "1"};
+        app.parseCmdOptions(opts1);
+    }
+
+    @Test
+    public void validGenDryRunOptions() {
+        String[] opts1 = {"-g", "-tgt", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+                "-src", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\sample_large", "-dt", "051214", "-c",
+                "1", "-dry"};
+        CleanupApp.main(opts1);
+    }
+    @Test
+    public void genWithOptions() {
+        String[] opts1 = {"-g", "-tgt", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+                "-src", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\sample_large", "-dt", "051214", "-c",
+                "10"};
+        CleanupApp.main(opts1);
+    }
+    @Test
+    public void delWithOptions() {
+        String[] opts1 =  {"-d", "-dd", "C:\\Users\\chaubaa\\Documents\\project\\poller-etl\\test_sample_large",
+                "-sd", "031211", "-ed", "042319"};
+        CleanupApp.main(opts1);
+    }
 }

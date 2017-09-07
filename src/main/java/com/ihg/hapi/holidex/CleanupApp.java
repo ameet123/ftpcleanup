@@ -36,6 +36,12 @@ public class CleanupApp {
     private int cnt;
     private String fileDate;
     private String deleteDirectory;
+    private boolean isDelete = false;
+    private boolean isGenerate = false;
+    private boolean isDryRun = false;
+
+    public CleanupApp() {
+    }
 
     /**
      * accept date strings and convert them to date type
@@ -58,7 +64,22 @@ public class CleanupApp {
     }
 
     public static void main(String[] args) {
-
+        CleanupApp app = new CleanupApp().parseCmdOptions(args);
+        if (app.isDelete) {
+            LOGGER.debug("##[DELETE]: dir:{} start:{} end:{}", app.deleteDirectory, app.startDate, app.endDate);
+            if (!app.isDryRun) {
+                app.delete(app.deleteDirectory);
+            }
+        } else if (app.isGenerate) {
+            LOGGER.debug("##[GENERATE]: source:{} target:{} fileDate:{} cnt:{}", app.sourceDir, app.targetDir, app
+                    .fileDate, app.cnt);
+            if (!app.isDryRun) {
+                app.generate(app.cnt, app.fileDate, app.sourceDir, app.targetDir);
+            }
+        }
+        if (app.isDryRun) {
+            LOGGER.debug(">> Dry run completed...");
+        }
     }
 
     /**
@@ -66,7 +87,7 @@ public class CleanupApp {
      *
      * @param args
      */
-    private void parseCmdOptions(String[] args) {
+    CleanupApp parseCmdOptions(String[] args) {
         Options options = new Options();
 
         Option generate = new Option("g", "generate", false, "generate test data");
@@ -91,37 +112,86 @@ public class CleanupApp {
         Option deleteDir = new Option("dd", "deleteDir", true, "directory to delete");
         deleteDir.setRequired(false);
         options.addOption(deleteDir);
+        Option startDateOption = new Option("sd", "startDate", true, "start date for files:MMddyy [011516]");
+        startDateOption.setRequired(false);
+        options.addOption(startDateOption);
+        Option endDateOption = new Option("ed", "endDate", true, "end date for files:MMddyy [031418]");
+        endDateOption.setRequired(false);
+        options.addOption(endDateOption);
+
+        // DRY Run
+        Option dryOpt = new Option("dry", "dryRun", false, "dry run, no action taken");
+        delete.setRequired(false);
+        options.addOption(dryOpt);
 
         CommandLineParser parser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
         CommandLine cmd = null;
-
+        String sD = null, eD = null;
+        String count = null;
+        boolean isError = false;
         try {
             cmd = parser.parse(options, args);
-
-            String count = cmd.getOptionValue("count");
-            fileDate = cmd.getOptionValue("date");
-            sourceDir = cmd.getOptionValue("sourceDir");
-            targetDir = cmd.getOptionValue("targetDir");
-            if (!Strings.isNullOrEmpty(count)) {
-                cnt = Integer.parseInt(count);
+            if (cmd.hasOption("g")) {
+                count = cmd.getOptionValue("count");
+                fileDate = cmd.getOptionValue("date");
+                sourceDir = cmd.getOptionValue("sourceDir");
+                targetDir = cmd.getOptionValue("targetDir");
+                if (!Strings.isNullOrEmpty(count)) {
+                    cnt = Integer.parseInt(count);
+                }
+                File src = new File(sourceDir);
+                File tgt = new File(targetDir);
+                if (!src.exists() || !src.isDirectory() || !tgt.exists() || !tgt.isDirectory()) {
+                    throw new org.apache.commons.cli.ParseException("Err: src or target dir not valid");
+                }
+                if (cnt < 1) {
+                    throw new org.apache.commons.cli.ParseException("Err: generate record count needs to be > 0");
+                }
+                FMT.parse(fileDate);
+                isGenerate = true;
+            } else if (cmd.hasOption("d")) {
+                deleteDirectory = cmd.getOptionValue("deleteDir");
+                sD = cmd.getOptionValue("startDate");
+                eD = cmd.getOptionValue("endDate");
+                startDate = FMT.parse(sD);
+                endDate = FMT.parse(eD);
+                if (!new File(deleteDirectory).exists()) {
+                    throw new org.apache.commons.cli.ParseException("Err: delete dir:" + deleteDirectory + " does not" +
+                            " exist or can't be accessed");
+                }
+                LOGGER.debug(">> DELETE action selected.{} -To- {} on dir:{}", startDate, endDate, deleteDirectory);
+                dateRegex = Pattern.compile(DATE_REGEX);
+                isDelete = true;
             }
 
-            // delete options
-            deleteDirectory = cmd.getOptionValue("deleteDir");
+            // validation
+            if (!cmd.hasOption("d") && !cmd.hasOption("g")) {
+                LOGGER.error("Err: either -d or -g needs to be provided");
+                isError = true;
+            }
+
+            // dry
+            if (cmd.hasOption("dry")) {
+                isDryRun = true;
+            }
 
         } catch (org.apache.commons.cli.ParseException e) {
-            LOGGER.error("Err: parsing options", e);
-            formatter.printHelp("utility-name", options);
-            System.exit(1);
+            LOGGER.error("Err: parsing options:{}", e.getMessage());
+            isError = true;
+        } catch (ParseException e) {
+            LOGGER.error("Err: date parsing in delete option. start:{} end:{} {}", sD, eD, e.getMessage());
+            isError = true;
+        } catch (NumberFormatException ne) {
+            LOGGER.error("Err: parsing count:{} {}", count, ne.getMessage());
+            isError = true;
         }
 
-        String inputFilePath = cmd.getOptionValue("input");
-        String outputFilePath = cmd.getOptionValue("output");
-
-        System.out.println(inputFilePath);
-        System.out.println(outputFilePath);
-
+        if (isError) {
+            formatter.printHelp("ftp-cleanup", options);
+            System.exit(1);
+        }
+        return this;
     }
 
     public void delete(String dirName) {
