@@ -44,6 +44,9 @@ public class CleanupApp {
     private boolean isGenerate = false;
     private boolean isDryRun = false;
     private ExecutorService executor;
+    private AtomicInteger count = new AtomicInteger(0);
+    private AtomicInteger desiredCount = new AtomicInteger(0);
+    private AtomicInteger actualCount = new AtomicInteger(0);
 
     public CleanupApp() {
         createExecutor();
@@ -249,7 +252,6 @@ public class CleanupApp {
     public void delete(String dirName) {
         Stopwatch stopwatch = Stopwatch.createStarted();
         Path dir = Paths.get(dirName);
-        AtomicInteger count = new AtomicInteger(0);
 
         LOGGER.info("Working on dir:{}", dir.toString());
         try {
@@ -262,13 +264,14 @@ public class CleanupApp {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    desiredCount.incrementAndGet();
                     Observable.just(file).observeOn(Schedulers.from(executor)).subscribe(new Subscriber<Path>() {
                         @Override
                         public void onCompleted() {
-                            count.incrementAndGet();
                             if (LOGGER.isTraceEnabled()) {
                                 LOGGER.trace(">>Completed:{}", count.get());
                             }
+                            actualCount.incrementAndGet();
                         }
 
                         @Override
@@ -300,6 +303,23 @@ public class CleanupApp {
         } catch (IOException e) {
             LOGGER.error("Err: Deleting files from dir:{}", dirName, e);
         }
+        LOGGER.debug("Desired count:{} actual count:{}", desiredCount.get(), actualCount.get());
+
+        int sleepCnt = 0;
+        while (true) {
+            try {
+                Thread.sleep(5000L);
+            } catch (InterruptedException e) {
+                LOGGER.error("Err: sleep interrupted");
+            }
+            LOGGER.debug("[{}]:POST SLeep: Desired count:{} actual count:{}", sleepCnt, desiredCount.get(),
+                    actualCount.get());
+            if (desiredCount.get() == actualCount.get() || sleepCnt > 4) {
+                break;
+            }
+            sleepCnt++;
+        }
+        LOGGER.debug("POST SLeep: Desired count:{} actual count:{}", desiredCount.get(), actualCount.get());
         shutdownAndAwaitTermination(executor);
         LOGGER.info("#{} completed: in:{}", count.get(), stopwatch.stop());
     }
@@ -310,15 +330,15 @@ public class CleanupApp {
      * @param file
      */
     private void deleteFile(Path file) {
-        SimpleDateFormat sdf = new SimpleDateFormat("MMddyy");
         Matcher m = dateRegex.matcher(file.getFileName().toString());
         if (m.find()) {
             try {
-                Date fileDate = sdf.parse(m.group(1));
+                Date fileDate = FMT.parse(m.group(1));
                 if (!(fileDate.before(startDate) || fileDate.after(endDate))) {
                     boolean stat = Files.deleteIfExists(file);
+                    int cnt = count.incrementAndGet();
                     if (LOGGER.isTraceEnabled()) {
-                        LOGGER.trace(">>>\tDeleting file:{}->{}", file.getFileName(), stat);
+                        LOGGER.trace(">>>\tDeleting file:{}->{} count:{}", file.getFileName(), stat, cnt);
                     }
                 }
             } catch (ParseException e) {

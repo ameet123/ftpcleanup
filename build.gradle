@@ -22,7 +22,7 @@ dependencies {
 
 
 jar {
-    version = '0.1.1'
+    version = '0.1.2'
     from(configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }) {
         exclude "META-INF/*.SF"
         exclude "META-INF/*.DSA"
