@@ -1,8 +1,8 @@
-**FTP Cleanup
+**Dir cleanup
 
 ***Objective:
 
-This program sets out to delete files from FTP staging directory 
+This program sets out to delete files from  directory 
 based on specified criteria.
 
 ***Running:
